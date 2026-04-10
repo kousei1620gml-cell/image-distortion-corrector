@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>画像ゆがみ補正 Webアプリ</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background-color: #f4f4f9; }
+        .controls { margin: 20px; padding: 15px; background: white; border-radius: 8px; display: inline-block; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        canvas { border: 1px solid #ccc; max-width: 100%; cursor: crosshair; background-color: #fff;}
+        #result-container { margin-top: 30px; }
+        #result-image { max-width: 100%; border: 2px solid #4CAF50; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        button { padding: 8px 16px; margin: 0 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h2>📸 画像ゆがみ補正 Webアプリ</h2>
+    
+    <div class="controls">
+        <input type="file" id="imageInput" accept="image/*">
+        
+        <label for="ratioSelect">比率:</label>
+        <select id="ratioSelect">
+            <option value="7:5">7:5</option>
+            <option value="1:1">Square (1:1)</option>
+            <option value="16:9">16:9</option>
+            <option value="5:7">5:7</option>
+            <option value="9:16">9:16</option>
+        </select>
+
+        <button onclick="clearPoints()">ポイントクリア</button>
+        <button onclick="processImage()" style="background-color: #4CAF50; color: white; border: none;">補正実行！</button>
+    </div>
+
+    <p>画像を読み込んで、四隅をタップ（クリック）してね！</p>
+
+    <div>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="result-container" style="display: none;">
+        <h3>✨ 補正完了！長押し(右クリック)で保存してね</h3>
+        <img id="result-image" src="" alt="補正結果">
+    </div>
+
+    <script>
+        const imageInput = document.getElementById('imageInput');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const resultContainer = document.getElementById('result-container');
+        const resultImage = document.getElementById('result-image');
+        
+        let img = new Image();
+        let points = [];
+        let scale = 1;
+
+        // 画像が選ばれた時の処理
+        imageInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                img.onload = function() {
+                    points = []; // 新しい画像になったらポイントをリセット
+                    drawCanvas();
+                }
+                img.src = event.target.result;
+            }
+            reader.readAsDataURL(file);
+        });
+
+        // キャンバスを描画する関数
+        function drawCanvas() {
+            // スマホでも見やすいように最大幅を設定
+            const maxWidth = window.innerWidth * 0.9;
+            scale = img.width > maxWidth ? maxWidth / img.width : 1;
+            
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            // クリックされたポイントを赤丸で描画
+            points.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x * scale, p.y * scale, 5, 0, Math.PI * 2);
+                ctx.fillStyle = "red";
+                ctx.fill();
+            });
+
+            // 4点揃ったら緑の線を引く
+            if (points.length === 4) {
+                ctx.beginPath();
+                ctx.moveTo(points[0].x * scale, points[0].y * scale);
+                for (let i = 1; i < 4; i++) {
+                    ctx.lineTo(points[i].x * scale, points[i].y * scale);
+                }
+                ctx.closePath();
+                ctx.strokeStyle = "lime";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+
+        // キャンバスをクリック（タップ）した時の処理
+        canvas.addEventListener('mousedown', function(e) {
+            if (points.length >= 4 || !img.src) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            // 実際の画像のピクセル座標に変換して保存
+            const x = (e.clientX - rect.left) / scale;
+            const y = (e.clientY - rect.top) / scale;
+            
+            points.push({x: x, y: y});
+            drawCanvas();
+        });
+
+        // スマホのタップ対応
+        canvas.addEventListener('touchstart', function(e) {
+            if (points.length >= 4 || !img.src) return;
+            e.preventDefault(); // スクロール防止
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            const x = (touch.clientX - rect.left) / scale;
+            const y = (touch.clientY - rect.top) / scale;
+            
+            points.push({x: x, y: y});
+            drawCanvas();
+        }, {passive: false});
+
+        function clearPoints() {
+            points = [];
+            drawCanvas();
+        }
+
+        // サーバーにデータを送って補正する処理
+        async function processImage() {
+            if (points.length !== 4) {
+                alert("四隅を4つクリックしてね！");
+                return;
+            }
+
+            const file = imageInput.files[0];
+            const ratioVal = document.getElementById('ratioSelect').value.split(':');
+            const ratio_w = parseFloat(ratioVal[0]);
+            const ratio_h = parseFloat(ratioVal[1]);
+
+            // OpenCV用に座標の配列形式を変換 [[x,y], [x,y]...]
+            const cvPoints = points.map(p => [p.x, p.y]);
+
+            const formData = new FormData();
+            formData.append('image', file);
+            formData.append('points', JSON.stringify(cvPoints));
+            formData.append('ratio_w', ratio_w);
+            formData.append('ratio_h', ratio_h);
+
+            try {
+                // Flaskサーバー( /process )に送信！
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    // 返ってきたBase64画像を表示
+                    resultImage.src = "data:image/jpeg;base64," + result.image;
+                    resultContainer.style.display = "block";
+                    // 下までスクロール
+                    resultContainer.scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    alert("エラーが発生しました: " + result.error);
+                }
+            } catch (error) {
+                alert("通信エラーが発生しました！");
+            }
+        }
+    </script>
+</body>
+</html>
