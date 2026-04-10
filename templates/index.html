@@ -6,20 +6,21 @@
     <title>画像ゆがみ補正 Webアプリ</title>
     <style>
         body { font-family: sans-serif; text-align: center; background-color: #f4f4f9; touch-action: manipulation; }
-        .controls { margin: 20px; padding: 15px; background: white; border-radius: 8px; display: inline-block; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        /* canvasのtouch-actionをnoneにしないことで、ピンチズームを許可します */
+        .controls { margin: 15px auto; padding: 10px; background: white; border-radius: 8px; display: inline-block; box-shadow: 0 2px 5px rgba(0,0,0,0.1); max-width: 95%; }
+        .btn-group { margin-top: 10px; }
         canvas { border: 1px solid #ccc; max-width: 100%; cursor: crosshair; background-color: #fff; }
         #result-container { margin-top: 30px; }
         #result-image { max-width: 100%; border: 2px solid #4CAF50; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
-        button { padding: 8px 16px; margin: 0 5px; cursor: pointer; }
+        button { padding: 8px 12px; margin: 3px; cursor: pointer; border-radius: 4px; border: 1px solid #ccc; background-color: #eee; }
+        .action-btn { background-color: #4CAF50; color: white; border: none; font-weight: bold; }
     </style>
 </head>
 <body>
     <h2>📸 画像ゆがみ補正 Webアプリ</h2>
     
     <div class="controls">
-        <input type="file" id="imageInput" accept="image/*">
-        
+        <input type="file" id="imageInput" accept="image/*" style="margin-bottom: 10px;">
+        <br>
         <label for="ratioSelect">比率:</label>
         <select id="ratioSelect">
             <option value="7:5">7:5</option>
@@ -29,18 +30,22 @@
             <option value="9:16">9:16</option>
         </select>
 
-        <button onclick="clearPoints()">ポイントクリア</button>
-        <button onclick="processImage()" style="background-color: #4CAF50; color: white; border: none;">補正実行！</button>
+        <div class="btn-group">
+            <button onclick="undo()">↩ 戻す</button>
+            <button onclick="redo()">やり直し ↪</button>
+            <button onclick="clearPoints()">クリア</button>
+            <button class="action-btn" onclick="processImage()">✨ 補正実行！</button>
+        </div>
     </div>
 
-    <p>画像を読み込んで四隅をタップ！<br>✨ <b>2本指でズーム、点を長押しで微調整（ドラッグ）</b>もできるよ！</p>
+    <p style="font-size: 0.9em;">画像を読み込んで四隅をタップ！<br><b>2本指でズーム、点を長押しで微調整</b>できるよ！</p>
 
     <div>
         <canvas id="canvas"></canvas>
     </div>
 
     <div id="result-container" style="display: none;">
-        <h3>✨ 補正完了！長押し(右クリック)で保存してね</h3>
+        <h3>✨ 補正完了！長押しで保存してね</h3>
         <img id="result-image" src="" alt="補正結果">
     </div>
 
@@ -54,11 +59,38 @@
         let img = new Image();
         let points = [];
         let scale = 1;
-        
-        // ドラッグ（微調整）用の変数
         let draggingIndex = -1;
-        // 点を掴む判定の広さ（スマホの指でも掴みやすいように大きめに設定）
         const hitRadius = 30; 
+
+        // Undo/Redo用の履歴管理
+        let history = [[]];
+        let historyStep = 0;
+
+        function saveHistory() {
+            // 過去に戻っている状態で新しい操作をしたら、それより先の未来は消す
+            history = history.slice(0, historyStep + 1);
+            // 現在の点を履歴に追加（ディープコピー）
+            history.push(JSON.parse(JSON.stringify(points)));
+            historyStep++;
+        }
+
+        function undo() {
+            if (historyStep > 0) {
+                historyStep--;
+                points = JSON.parse(JSON.stringify(history[historyStep]));
+                draggingIndex = -1;
+                drawCanvas();
+            }
+        }
+
+        function redo() {
+            if (historyStep < history.length - 1) {
+                historyStep++;
+                points = JSON.parse(JSON.stringify(history[historyStep]));
+                draggingIndex = -1;
+                drawCanvas();
+            }
+        }
 
         imageInput.addEventListener('change', function(e) {
             const file = e.target.files[0];
@@ -66,7 +98,18 @@
             const reader = new FileReader();
             reader.onload = function(event) {
                 img.onload = function() {
+                    // 画像読み込み時に初期化
                     points = []; 
+                    history = [[]];
+                    historyStep = 0;
+                    draggingIndex = -1;
+                    
+                    // ズーム時の違和感をなくすため、キャンバスサイズの計算はここ(1回)だけにする！
+                    const maxWidth = window.innerWidth * 0.95;
+                    scale = img.width > maxWidth ? maxWidth / img.width : 1;
+                    canvas.width = img.width * scale;
+                    canvas.height = img.height * scale;
+                    
                     drawCanvas();
                 }
                 img.src = event.target.result;
@@ -75,24 +118,16 @@
         });
 
         function drawCanvas() {
-            const maxWidth = window.innerWidth * 0.95;
-            scale = img.width > maxWidth ? maxWidth / img.width : 1;
-            
-            canvas.width = img.width * scale;
-            canvas.height = img.height * scale;
-            
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-            // 点を描画
             points.forEach((p, index) => {
                 ctx.beginPath();
                 ctx.arc(p.x * scale, p.y * scale, draggingIndex === index ? 8 : 5, 0, Math.PI * 2);
-                ctx.fillStyle = draggingIndex === index ? "orange" : "red"; // 掴んでいる点はオレンジに
+                ctx.fillStyle = draggingIndex === index ? "orange" : "red";
                 ctx.fill();
             });
 
-            // 4点揃ったら緑の線を引く
             if (points.length === 4) {
                 ctx.beginPath();
                 ctx.moveTo(points[0].x * scale, points[0].y * scale);
@@ -106,7 +141,6 @@
             }
         }
 
-        // 画面のタップ座標を、画像内の正確な座標に変換する関数（ズーム時も対応）
         function getPos(clientX, clientY) {
             const rect = canvas.getBoundingClientRect();
             const canvasX = (clientX - rect.left) * (canvas.width / rect.width);
@@ -114,17 +148,16 @@
             return { x: canvasX / scale, y: canvasY / scale };
         }
 
-        // --- PCのオプティマイズ（マウス操作） ---
+        // --- マウス操作 ---
         canvas.addEventListener('mousedown', function(e) {
             if (!img.src) return;
             const pos = getPos(e.clientX, e.clientY);
             
-            // 既存の点の近くをクリックしたかチェック（ドラッグ開始）
             draggingIndex = points.findIndex(p => Math.hypot(p.x - pos.x, p.y - pos.y) * scale < hitRadius);
             
-            // 近くに点がなく、まだ4点未満なら新規追加
             if (draggingIndex === -1 && points.length < 4) {
                 points.push({x: pos.x, y: pos.y});
+                saveHistory(); // 点を追加した時に履歴を保存
             }
             drawCanvas();
         });
@@ -137,29 +170,41 @@
             }
         });
 
-        canvas.addEventListener('mouseup', () => draggingIndex = -1);
-        canvas.addEventListener('mouseleave', () => draggingIndex = -1);
+        canvas.addEventListener('mouseup', function() {
+            if (draggingIndex !== -1) {
+                saveHistory(); // ドラッグが終わった時に履歴を保存
+                draggingIndex = -1;
+                drawCanvas(); // 色を元に戻すために再描画
+            }
+        });
+        
+        canvas.addEventListener('mouseleave', function() {
+            if (draggingIndex !== -1) {
+                saveHistory();
+                draggingIndex = -1;
+                drawCanvas();
+            }
+        });
 
-
-        // --- スマホのオプティマイズ（タッチ操作） ---
+        // --- タッチ操作 ---
         canvas.addEventListener('touchstart', function(e) {
-            if (!img.src || e.touches.length >= 2) return; // 2本指以上の時はズームに任せる
+            if (!img.src || e.touches.length >= 2) return; 
             
-            e.preventDefault(); // 1本指の時は画面スクロールを止める
+            e.preventDefault(); 
             const touch = e.touches[0];
             const pos = getPos(touch.clientX, touch.clientY);
             
-            // 既存の点の近くをタップしたかチェック
             draggingIndex = points.findIndex(p => Math.hypot(p.x - pos.x, p.y - pos.y) * scale < hitRadius);
             
             if (draggingIndex === -1 && points.length < 4) {
                 points.push({x: pos.x, y: pos.y});
+                saveHistory(); // 点を追加した時に履歴を保存
             }
             drawCanvas();
         }, {passive: false});
 
         canvas.addEventListener('touchmove', function(e) {
-            if (e.touches.length >= 2) return; // ズーム中は点は動かさない
+            if (e.touches.length >= 2) return; 
             if (draggingIndex !== -1) {
                 e.preventDefault();
                 const touch = e.touches[0];
@@ -169,11 +214,18 @@
             }
         }, {passive: false});
 
-        canvas.addEventListener('touchend', () => draggingIndex = -1);
+        canvas.addEventListener('touchend', function() {
+            if (draggingIndex !== -1) {
+                saveHistory(); // ドラッグが終わった時に履歴を保存
+                draggingIndex = -1;
+                drawCanvas(); // 色を元に戻すために再描画
+            }
+        });
 
         function clearPoints() {
             points = [];
             draggingIndex = -1;
+            saveHistory();
             drawCanvas();
         }
 
